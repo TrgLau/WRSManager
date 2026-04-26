@@ -8,6 +8,7 @@
 #include <wx/timer.h>
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 #include "TerminalLogger.h"
 
@@ -16,6 +17,52 @@ public:
     MainFrame();
 
 private:
+    struct TabContext {
+        wxTextCtrl* terminalOutput = nullptr;
+        wxButton* installButton = nullptr;
+        wxButton* installServerButton = nullptr;
+        wxButton* startServerButton = nullptr;
+        wxButton* stopServerButton = nullptr;
+        wxButton* validateJsonButton = nullptr;
+        wxCheckBox* autoBackupChk = nullptr;
+        wxChoice* backupIntervalChoice = nullptr;
+        wxSpinCtrl* maxBackupsCtrl = nullptr;
+        wxTextCtrl* inviteCodeCtrl = nullptr;
+        wxCheckBox* passwordProtectedChk = nullptr;
+        wxTextCtrl* passwordCtrl = nullptr;
+        wxTextCtrl* serverNameCtrl = nullptr;
+        wxSpinCtrl* maxPlayerCountCtrl = nullptr;
+        wxTextCtrl* userSelectedRegionCtrl = nullptr;
+        wxCheckBox* useDirectConnectionChk = nullptr;
+        wxTextCtrl* directConnectionServerAddressCtrl = nullptr;
+        wxSpinCtrl* directConnectionServerPortCtrl = nullptr;
+        wxTextCtrl* directConnectionProxyAddressCtrl = nullptr;
+        wxTextCtrl* worldIslandIdCtrl = nullptr;
+        wxTextCtrl* worldNameCtrl = nullptr;
+        wxChoice* worldPresetChoice = nullptr;
+        wxCheckBox* sharedQuestsChk = nullptr;
+        wxCheckBox* easyExploreChk = nullptr;
+        wxTextCtrl* mobHealthMultiplierCtrl = nullptr;
+        wxTextCtrl* mobDamageMultiplierCtrl = nullptr;
+        wxTextCtrl* shipsHealthMultiplierCtrl = nullptr;
+        wxTextCtrl* shipsDamageMultiplierCtrl = nullptr;
+        wxTextCtrl* boardingDifficultyMultiplierCtrl = nullptr;
+        wxTextCtrl* coopStatsCorrectionCtrl = nullptr;
+        wxTextCtrl* coopShipStatsCorrectionCtrl = nullptr;
+        wxChoice* combatDifficultyChoice = nullptr;
+        std::unique_ptr<TerminalLogger> logger;
+        bool steamcmdInstalled = false;
+        bool serverInstalled = false;
+    };
+
+    TabContext* GetTabContextByIndex(int idx);
+    const TabContext* GetTabContextByIndex(int idx) const;
+    void ActivateTabContext(int idx);
+    void SetCurrentTabSteamcmdInstalled(bool installed);
+    void SetCurrentTabServerInstalled(bool installed);
+    TerminalLogger* GetLoggerForPage(wxWindow* page);
+    void LogForTab(wxWindow* page, LogLevel level, const wxString& message);
+
     void OnClose(wxCloseEvent& event);
     void OnExit(wxCommandEvent& event);
     void OnAbout(wxCommandEvent& event);
@@ -81,7 +128,8 @@ private:
     wxTextCtrl* m_coopStatsCorrectionCtrl = nullptr;
     wxTextCtrl* m_coopShipStatsCorrectionCtrl = nullptr;
     wxChoice* m_combatDifficultyChoice = nullptr;
-    std::unique_ptr<TerminalLogger> m_logger;
+    TerminalLogger* m_logger = nullptr;
+    std::unordered_map<wxWindow*, TabContext> m_tabContexts;
     wxString m_lastInstallDir;
     int m_nextTabNum = 2;
     bool m_steamcmdInstalled = false;

@@ -21,6 +21,7 @@
 #include <string>
 #include <functional>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -206,6 +207,7 @@ MainFrame::MainFrame()
 
     LoadAppState();
     EnsureBaseInstallDir();
+    ActivateTabContext(m_notebook->GetSelection());
 
     auto* rootSizer = new wxBoxSizer(wxVERTICAL);
     rootSizer->Add(m_notebook, 1, wxEXPAND);
@@ -236,6 +238,34 @@ bool MainFrame::CreateTab(const wxString& tabName) {
     }
 
     const wxString tabDirWx = m_lastInstallDir + wxFILE_SEP_PATH + tabName;
+    auto normalizePathKey = [](const std::filesystem::path& p) {
+        std::error_code normEc;
+        std::filesystem::path normalized = std::filesystem::weakly_canonical(p, normEc);
+        if (normEc) {
+            normalized = p.lexically_normal();
+        }
+        std::string key = normalized.string();
+#ifdef _WIN32
+        std::transform(key.begin(), key.end(), key.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+#endif
+        return key;
+    };
+    const std::string targetDirKey = normalizePathKey(std::filesystem::path(tabDirWx.ToStdString()));
+    for (size_t i = 0; i < m_notebook->GetPageCount(); ++i) {
+        if (m_notebook->GetPage(i) == m_plusPage) {
+            continue;
+        }
+        const wxString existingTabName = m_notebook->GetPageText(i);
+        const wxString existingDirWx = m_lastInstallDir + wxFILE_SEP_PATH + existingTabName;
+        if (normalizePathKey(std::filesystem::path(existingDirWx.ToStdString())) == targetDirKey) {
+            wxMessageBox(wxString::Format(wxT("Le dossier \"%s\" est deja utilise par l'onglet \"%s\"."),
+                                          tabDirWx, existingTabName),
+                         wxT("Onglet duplique"), wxOK | wxICON_WARNING, this);
+            return false;
+        }
+    }
+
     std::error_code ec;
     std::filesystem::create_directories(tabDirWx.ToStdString(), ec);
     if (ec) {
@@ -395,14 +425,54 @@ bool MainFrame::CreateTab(const wxString& tabName) {
     m_autoBackupChk = autoBackupChk;
     m_backupIntervalChoice = backupIntervalChoice;
     m_maxBackupsCtrl = maxBackupsCtrl;
-    m_logger = std::make_unique<TerminalLogger>(m_terminalOutput);
-    m_logger->SetLevelColor(LogLevel::Plain, wxColour(255, 255, 255));
-    m_logger->SetLevelColor(LogLevel::Info, wxColour(255, 255, 255));
-    m_logger->SetLevelColor(LogLevel::Debug, wxColour(180, 180, 180));
-    m_logger->SetLevelColor(LogLevel::Warning, wxColour(255, 200, 0));
-    m_logger->SetLevelColor(LogLevel::Error, wxColour(255, 90, 90));
-    m_logger->SetLevelColor(LogLevel::Success, wxColour(0, 255, 0));
-    m_logger->SetLevelColor(LogLevel::Note, wxColour(120, 190, 255));
+    auto logger = std::make_unique<TerminalLogger>(m_terminalOutput);
+    logger->SetLevelColor(LogLevel::Plain, wxColour(255, 255, 255));
+    logger->SetLevelColor(LogLevel::Info, wxColour(255, 255, 255));
+    logger->SetLevelColor(LogLevel::Debug, wxColour(180, 180, 180));
+    logger->SetLevelColor(LogLevel::Warning, wxColour(255, 200, 0));
+    logger->SetLevelColor(LogLevel::Error, wxColour(255, 90, 90));
+    logger->SetLevelColor(LogLevel::Success, wxColour(0, 255, 0));
+    logger->SetLevelColor(LogLevel::Note, wxColour(120, 190, 255));
+    m_logger = logger.get();
+
+    TabContext ctx;
+    ctx.terminalOutput = m_terminalOutput;
+    ctx.installButton = m_installButton;
+    ctx.installServerButton = m_installServerButton;
+    ctx.startServerButton = m_startServerButton;
+    ctx.stopServerButton = m_stopServerButton;
+    ctx.validateJsonButton = m_validateJsonButton;
+    ctx.autoBackupChk = m_autoBackupChk;
+    ctx.backupIntervalChoice = m_backupIntervalChoice;
+    ctx.maxBackupsCtrl = m_maxBackupsCtrl;
+    ctx.inviteCodeCtrl = m_inviteCodeCtrl;
+    ctx.passwordProtectedChk = m_passwordProtectedChk;
+    ctx.passwordCtrl = m_passwordCtrl;
+    ctx.serverNameCtrl = m_serverNameCtrl;
+    ctx.maxPlayerCountCtrl = m_maxPlayerCountCtrl;
+    ctx.userSelectedRegionCtrl = m_userSelectedRegionCtrl;
+    ctx.useDirectConnectionChk = m_useDirectConnectionChk;
+    ctx.directConnectionServerAddressCtrl = m_directConnectionServerAddressCtrl;
+    ctx.directConnectionServerPortCtrl = m_directConnectionServerPortCtrl;
+    ctx.directConnectionProxyAddressCtrl = m_directConnectionProxyAddressCtrl;
+    ctx.worldIslandIdCtrl = m_worldIslandIdCtrl;
+    ctx.worldNameCtrl = m_worldNameCtrl;
+    ctx.worldPresetChoice = m_worldPresetChoice;
+    ctx.sharedQuestsChk = m_sharedQuestsChk;
+    ctx.easyExploreChk = m_easyExploreChk;
+    ctx.mobHealthMultiplierCtrl = m_mobHealthMultiplierCtrl;
+    ctx.mobDamageMultiplierCtrl = m_mobDamageMultiplierCtrl;
+    ctx.shipsHealthMultiplierCtrl = m_shipsHealthMultiplierCtrl;
+    ctx.shipsDamageMultiplierCtrl = m_shipsDamageMultiplierCtrl;
+    ctx.boardingDifficultyMultiplierCtrl = m_boardingDifficultyMultiplierCtrl;
+    ctx.coopStatsCorrectionCtrl = m_coopStatsCorrectionCtrl;
+    ctx.coopShipStatsCorrectionCtrl = m_coopShipStatsCorrectionCtrl;
+    ctx.combatDifficultyChoice = m_combatDifficultyChoice;
+    ctx.steamcmdInstalled = false;
+    ctx.serverInstalled = false;
+    ctx.logger = std::move(logger);
+    m_tabContexts[page] = std::move(ctx);
+
     m_logger->Log(LogLevel::Info, wxString::Format(wxT("[INFO] Tab created: %s\n"), tabName));
     m_logger->Log(LogLevel::Note, wxString::Format(wxT("[NOTE] Install folder: %s\n"), tabDirWx));
     SetJsonControlsEnabled(false);
@@ -412,7 +482,118 @@ bool MainFrame::CreateTab(const wxString& tabName) {
     return true;
 }
 
+MainFrame::TabContext* MainFrame::GetTabContextByIndex(int idx) {
+    if (!m_notebook || idx == wxNOT_FOUND) {
+        return nullptr;
+    }
+    wxWindow* page = m_notebook->GetPage(idx);
+    if (!page || page == m_plusPage) {
+        return nullptr;
+    }
+    auto it = m_tabContexts.find(page);
+    if (it == m_tabContexts.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+const MainFrame::TabContext* MainFrame::GetTabContextByIndex(int idx) const {
+    if (!m_notebook || idx == wxNOT_FOUND) {
+        return nullptr;
+    }
+    wxWindow* page = m_notebook->GetPage(idx);
+    if (!page || page == m_plusPage) {
+        return nullptr;
+    }
+    auto it = m_tabContexts.find(page);
+    if (it == m_tabContexts.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+void MainFrame::ActivateTabContext(int idx) {
+    TabContext* ctx = GetTabContextByIndex(idx);
+    if (!ctx) {
+        return;
+    }
+    m_terminalOutput = ctx->terminalOutput;
+    m_installButton = ctx->installButton;
+    m_installServerButton = ctx->installServerButton;
+    m_startServerButton = ctx->startServerButton;
+    m_stopServerButton = ctx->stopServerButton;
+    m_validateJsonButton = ctx->validateJsonButton;
+    m_autoBackupChk = ctx->autoBackupChk;
+    m_backupIntervalChoice = ctx->backupIntervalChoice;
+    m_maxBackupsCtrl = ctx->maxBackupsCtrl;
+    m_inviteCodeCtrl = ctx->inviteCodeCtrl;
+    m_passwordProtectedChk = ctx->passwordProtectedChk;
+    m_passwordCtrl = ctx->passwordCtrl;
+    m_serverNameCtrl = ctx->serverNameCtrl;
+    m_maxPlayerCountCtrl = ctx->maxPlayerCountCtrl;
+    m_userSelectedRegionCtrl = ctx->userSelectedRegionCtrl;
+    m_useDirectConnectionChk = ctx->useDirectConnectionChk;
+    m_directConnectionServerAddressCtrl = ctx->directConnectionServerAddressCtrl;
+    m_directConnectionServerPortCtrl = ctx->directConnectionServerPortCtrl;
+    m_directConnectionProxyAddressCtrl = ctx->directConnectionProxyAddressCtrl;
+    m_worldIslandIdCtrl = ctx->worldIslandIdCtrl;
+    m_worldNameCtrl = ctx->worldNameCtrl;
+    m_worldPresetChoice = ctx->worldPresetChoice;
+    m_sharedQuestsChk = ctx->sharedQuestsChk;
+    m_easyExploreChk = ctx->easyExploreChk;
+    m_mobHealthMultiplierCtrl = ctx->mobHealthMultiplierCtrl;
+    m_mobDamageMultiplierCtrl = ctx->mobDamageMultiplierCtrl;
+    m_shipsHealthMultiplierCtrl = ctx->shipsHealthMultiplierCtrl;
+    m_shipsDamageMultiplierCtrl = ctx->shipsDamageMultiplierCtrl;
+    m_boardingDifficultyMultiplierCtrl = ctx->boardingDifficultyMultiplierCtrl;
+    m_coopStatsCorrectionCtrl = ctx->coopStatsCorrectionCtrl;
+    m_coopShipStatsCorrectionCtrl = ctx->coopShipStatsCorrectionCtrl;
+    m_combatDifficultyChoice = ctx->combatDifficultyChoice;
+    m_logger = ctx->logger.get();
+    m_steamcmdInstalled = ctx->steamcmdInstalled;
+    m_serverInstalled = ctx->serverInstalled;
+}
+
+void MainFrame::SetCurrentTabSteamcmdInstalled(bool installed) {
+    m_steamcmdInstalled = installed;
+    TabContext* ctx = GetTabContextByIndex(m_notebook ? m_notebook->GetSelection() : wxNOT_FOUND);
+    if (ctx) {
+        ctx->steamcmdInstalled = installed;
+    }
+}
+
+void MainFrame::SetCurrentTabServerInstalled(bool installed) {
+    m_serverInstalled = installed;
+    TabContext* ctx = GetTabContextByIndex(m_notebook ? m_notebook->GetSelection() : wxNOT_FOUND);
+    if (ctx) {
+        ctx->serverInstalled = installed;
+    }
+}
+
+TerminalLogger* MainFrame::GetLoggerForPage(wxWindow* page) {
+    if (!page || page == m_plusPage) {
+        return nullptr;
+    }
+    auto it = m_tabContexts.find(page);
+    if (it == m_tabContexts.end()) {
+        return nullptr;
+    }
+    return it->second.logger.get();
+}
+
+void MainFrame::LogForTab(wxWindow* page, LogLevel level, const wxString& message) {
+    if (TerminalLogger* logger = GetLoggerForPage(page)) {
+        logger->Log(level, message);
+        return;
+    }
+    if (m_logger) {
+        m_logger->Log(level, message);
+    }
+}
+
 void MainFrame::OnNotebookPageChanged(wxBookCtrlEvent& event) {
+    ActivateTabContext(event.GetSelection());
+    SetBusyButtons(false);
     event.Skip();
 }
 
@@ -440,8 +621,29 @@ void MainFrame::AppendNewTabAfterPlus() {
         return;
     }
 
-    wxTextEntryDialog dlg(this, wxT("Server name:"), wxT("New server"),
-                          wxT("Server 1"));
+    int suggestedNum = 1;
+    for (size_t i = 0; i < m_notebook->GetPageCount(); ++i) {
+        if (m_notebook->GetPage(i) != m_plusPage) {
+            ++suggestedNum;
+        }
+    }
+    auto tabNameExists = [this](const wxString& candidate) {
+        for (size_t i = 0; i < m_notebook->GetPageCount(); ++i) {
+            if (m_notebook->GetPage(i) == m_plusPage) {
+                continue;
+            }
+            if (m_notebook->GetPageText(i).CmpNoCase(candidate) == 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+    wxString defaultTabName;
+    do {
+        defaultTabName = wxString::Format(wxT("Server %d"), suggestedNum++);
+    } while (tabNameExists(defaultTabName));
+
+    wxTextEntryDialog dlg(this, wxT("Server name:"), wxT("New server"), defaultTabName);
     if (dlg.ShowModal() != wxID_OK) {
         return;
     }
@@ -479,13 +681,14 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
     if (sel == wxNOT_FOUND || m_notebook->GetPage(sel) == m_plusPage) {
         return;
     }
+    wxWindow* const targetPage = m_notebook->GetPage(sel);
     const wxString tabName = m_notebook->GetPageText(sel);
     const wxString installDirWx = m_lastInstallDir + wxFILE_SEP_PATH + tabName;
 #ifdef _WIN32
     SetBusyButtons(true);
-    m_logger->Log(LogLevel::Info, wxT("[INFO] SteamCMD installation requested.\n"));
+    LogForTab(targetPage, LogLevel::Info, wxT("[INFO] SteamCMD installation requested.\n"));
 
-    std::thread([this, installDirWx]() {
+    std::thread([this, installDirWx, targetPage]() {
         const std::string installDir = installDirWx.ToStdString();
         const std::string steamRoot = installDir + "\\steamcmd";
         const std::string zipPath = steamRoot + "\\steamcmd.zip";
@@ -561,9 +764,9 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
         std::error_code fsErr;
         const bool alreadyExists = std::filesystem::exists(steamRoot, fsErr);
         if (fsErr) {
-            this->CallAfter([this, msg = toWx(fsErr.message())]() {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(wxT("[ERROR] Unable to check steamcmd folder: %s\n"), msg));
+            this->CallAfter([this, msg = toWx(fsErr.message()), targetPage]() {
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(wxT("[ERROR] Unable to check steamcmd folder: %s\n"), msg));
                 SetBusyButtons(false);
             });
             return;
@@ -571,46 +774,46 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
         if (alreadyExists) {
             const auto removed = std::filesystem::remove_all(steamRoot, fsErr);
             if (fsErr) {
-                this->CallAfter([this, msg = toWx(fsErr.message())]() {
-                    m_logger->Log(LogLevel::Error,
-                                  wxString::Format(wxT("[ERROR] Unable to remove steamcmd folder: %s\n"), msg));
+                this->CallAfter([this, msg = toWx(fsErr.message()), targetPage]() {
+                    LogForTab(targetPage, LogLevel::Error,
+                              wxString::Format(wxT("[ERROR] Unable to remove steamcmd folder: %s\n"), msg));
                     m_installButton->Enable(true);
                     m_installServerButton->Enable(m_steamcmdInstalled);
                 });
                 return;
             }
-            this->CallAfter([this, removed]() {
-                m_logger->Log(LogLevel::Warning,
-                              wxString::Format(wxT("[INFO] Existing steamcmd folder removed (%llu entries).\n"),
-                                               static_cast<unsigned long long>(removed)));
+            this->CallAfter([this, removed, targetPage]() {
+                LogForTab(targetPage, LogLevel::Warning,
+                          wxString::Format(wxT("[INFO] Existing steamcmd folder removed (%llu entries).\n"),
+                                           static_cast<unsigned long long>(removed)));
             });
         }
         std::filesystem::create_directories(steamRoot, fsErr);
         if (fsErr) {
-            this->CallAfter([this, msg = toWx(fsErr.message())]() {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(wxT("[ERROR] Unable to create steamcmd folder: %s\n"), msg));
+            this->CallAfter([this, msg = toWx(fsErr.message()), targetPage]() {
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(wxT("[ERROR] Unable to create steamcmd folder: %s\n"), msg));
                 m_installButton->Enable(true);
                 m_installServerButton->Enable(m_steamcmdInstalled);
             });
             return;
         }
 
-        this->CallAfter([this, installDirWx, steamRoot = toWx(steamRoot), zipPath = toWx(zipPath)]() {
-            m_logger->Log(LogLevel::Note, wxString::Format(wxT("[NOTE] Target folder: %s\n"), installDirWx));
-            m_logger->Log(LogLevel::Note, wxString::Format(wxT("[NOTE] steamcmd subfolder: %s\n"), steamRoot));
-            m_logger->Log(LogLevel::Note, wxString::Format(wxT("[NOTE] Zip target path: %s\n"), zipPath));
-            m_logger->Log(LogLevel::Info, wxT("[INFO] Downloading steamcmd.zip...\n"));
+        this->CallAfter([this, installDirWx, steamRoot = toWx(steamRoot), zipPath = toWx(zipPath), targetPage]() {
+            LogForTab(targetPage, LogLevel::Note, wxString::Format(wxT("[NOTE] Target folder: %s\n"), installDirWx));
+            LogForTab(targetPage, LogLevel::Note, wxString::Format(wxT("[NOTE] steamcmd subfolder: %s\n"), steamRoot));
+            LogForTab(targetPage, LogLevel::Note, wxString::Format(wxT("[NOTE] Zip target path: %s\n"), zipPath));
+            LogForTab(targetPage, LogLevel::Info, wxT("[INFO] Downloading steamcmd.zip...\n"));
         });
 
         HINTERNET hInternet = InternetOpenA("WRSManager", INTERNET_OPEN_TYPE_PRECONFIG,
                                             nullptr, nullptr, 0);
         if (!hInternet) {
             const DWORD err = GetLastError();
-            this->CallAfter([this, err]() {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(wxT("[ERROR] InternetOpenA failed (code %lu).\n"),
-                                               static_cast<unsigned long>(err)));
+            this->CallAfter([this, err, targetPage]() {
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(wxT("[ERROR] InternetOpenA failed (code %lu).\n"),
+                                           static_cast<unsigned long>(err)));
                 m_installButton->Enable(true);
                 m_installServerButton->Enable(m_steamcmdInstalled);
             });
@@ -623,10 +826,10 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
         if (!hUrl) {
             const DWORD err = GetLastError();
             InternetCloseHandle(hInternet);
-            this->CallAfter([this, err]() {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(wxT("[ERROR] InternetOpenUrlA failed (code %lu).\n"),
-                                               static_cast<unsigned long>(err)));
+            this->CallAfter([this, err, targetPage]() {
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(wxT("[ERROR] InternetOpenUrlA failed (code %lu).\n"),
+                                           static_cast<unsigned long>(err)));
                 m_installButton->Enable(true);
                 m_installServerButton->Enable(m_steamcmdInstalled);
             });
@@ -640,10 +843,10 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
             const DWORD err = GetLastError();
             InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
-            this->CallAfter([this, err]() {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(wxT("[ERROR] Unable to create zip file (code %lu).\n"),
-                                               static_cast<unsigned long>(err)));
+            this->CallAfter([this, err, targetPage]() {
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(wxT("[ERROR] Unable to create zip file (code %lu).\n"),
+                                           static_cast<unsigned long>(err)));
                 m_installButton->Enable(true);
                 m_installServerButton->Enable(m_steamcmdInstalled);
             });
@@ -656,13 +859,13 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
             HttpQueryInfoA(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER,
                            &contentLength, &contentLengthSize, nullptr) == TRUE &&
             contentLength > 0;
-        this->CallAfter([this, hasContentLength, contentLength]() {
+        this->CallAfter([this, hasContentLength, contentLength, targetPage]() {
             if (hasContentLength) {
-                m_logger->Log(LogLevel::Note,
-                              wxString::Format(wxT("[DOWNLOAD] Reported size: %lu bytes\n"),
-                                               static_cast<unsigned long>(contentLength)));
+                LogForTab(targetPage, LogLevel::Note,
+                          wxString::Format(wxT("[DOWNLOAD] Reported size: %lu bytes\n"),
+                                           static_cast<unsigned long>(contentLength)));
             } else {
-                m_logger->Log(LogLevel::Note, wxT("[DOWNLOAD] Unknown size (no Content-Length)\n"));
+                LogForTab(targetPage, LogLevel::Note, wxT("[DOWNLOAD] Unknown size (no Content-Length)\n"));
             }
         });
 
@@ -681,10 +884,10 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
                 CloseHandle(hOutFile);
                 InternetCloseHandle(hUrl);
                 InternetCloseHandle(hInternet);
-                this->CallAfter([this, err]() {
-                    m_logger->Log(LogLevel::Error,
-                                  wxString::Format(wxT("[ERROR] Zip write failed (code %lu).\n"),
-                                                   static_cast<unsigned long>(err)));
+                this->CallAfter([this, err, targetPage]() {
+                    LogForTab(targetPage, LogLevel::Error,
+                              wxString::Format(wxT("[ERROR] Zip write failed (code %lu).\n"),
+                                               static_cast<unsigned long>(err)));
                     m_installButton->Enable(true);
                     m_installServerButton->Enable(m_steamcmdInstalled);
                 });
@@ -696,19 +899,19 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
                 const int percent = static_cast<int>((totalRead * 100ULL) / contentLength);
                 if (percent >= lastPercent + 1 || percent == 100) {
                     lastPercent = percent;
-                    this->CallAfter([this, percent, totalRead, contentLength]() {
-                        m_logger->Log(LogLevel::Note,
-                                      wxString::Format(wxT("[DOWNLOAD] %d%% (%llu/%lu)\n"), percent,
-                                                       static_cast<unsigned long long>(totalRead),
-                                                       static_cast<unsigned long>(contentLength)));
+                    this->CallAfter([this, percent, totalRead, contentLength, targetPage]() {
+                        LogForTab(targetPage, LogLevel::Note,
+                                  wxString::Format(wxT("[DOWNLOAD] %d%% (%llu/%lu)\n"), percent,
+                                                   static_cast<unsigned long long>(totalRead),
+                                                   static_cast<unsigned long>(contentLength)));
                     });
                 }
             } else if (totalRead - lastLoggedBytes >= (1024ULL * 1024ULL)) {
                 lastLoggedBytes = totalRead;
-                this->CallAfter([this, totalRead]() {
-                    m_logger->Log(LogLevel::Note,
-                                  wxString::Format(wxT("[DOWNLOAD] %llu bytes received\n"),
-                                                   static_cast<unsigned long long>(totalRead)));
+                this->CallAfter([this, totalRead, targetPage]() {
+                    LogForTab(targetPage, LogLevel::Note,
+                              wxString::Format(wxT("[DOWNLOAD] %llu bytes received\n"),
+                                               static_cast<unsigned long long>(totalRead)));
                 });
             }
         }
@@ -720,16 +923,16 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
         const auto downloadMs =
             std::chrono::duration_cast<std::chrono::milliseconds>(downloadEnd - downloadStart)
                 .count();
-        this->CallAfter([this, totalRead, downloadMs]() {
-            m_logger->Log(LogLevel::Note,
-                          wxString::Format(wxT("[DOWNLOAD] 100%% (%llu bytes in %lld ms)\n"),
-                                           static_cast<unsigned long long>(totalRead),
-                                           static_cast<long long>(downloadMs)));
+        this->CallAfter([this, totalRead, downloadMs, targetPage]() {
+            LogForTab(targetPage, LogLevel::Note,
+                      wxString::Format(wxT("[DOWNLOAD] 100%% (%llu bytes in %lld ms)\n"),
+                                       static_cast<unsigned long long>(totalRead),
+                                       static_cast<long long>(downloadMs)));
         });
 
-        this->CallAfter([this]() {
-            m_logger->Log(LogLevel::Info, wxT("[INFO] Extracting steamcmd.zip...\n"));
-            m_logger->Log(LogLevel::Note, wxT("[INFO] Unzip progress format: [UNZIP] current/total file\n"));
+        this->CallAfter([this, targetPage]() {
+            LogForTab(targetPage, LogLevel::Info, wxT("[INFO] Extracting steamcmd.zip...\n"));
+            LogForTab(targetPage, LogLevel::Note, wxT("[INFO] Unzip progress format: [UNZIP] current/total file\n"));
         });
 
         const std::string psCmd =
@@ -758,7 +961,7 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
             "} finally { $archive.Dispose() }\"";
         DWORD unzipExitCode = 1;
         std::string unzipBuffer;
-        auto onUnzipChunk = [this, &unzipBuffer](const std::string& chunk) {
+        auto onUnzipChunk = [this, &unzipBuffer, targetPage](const std::string& chunk) {
             unzipBuffer += chunk;
             size_t nlPos = 0;
             while ((nlPos = unzipBuffer.find('\n')) != std::string::npos) {
@@ -781,44 +984,44 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
                         const std::string fileS = line.substr(p2 + 1);
                         const long cur = std::strtol(curS.c_str(), nullptr, 10);
                         const long total = std::strtol(totalS.c_str(), nullptr, 10);
-                        this->CallAfter([this, cur, total, fileS]() {
+                        this->CallAfter([this, cur, total, fileS, targetPage]() {
                             const long percent = (total > 0) ? (cur * 100 / total) : 0;
-                            m_logger->Log(LogLevel::Note,
-                                          wxString::Format(wxT("[UNZIP] %ld/%ld (%ld%%) %s\n"), cur, total,
-                                                           percent,
-                                                           wxString::FromUTF8(fileS.c_str())));
+                            LogForTab(targetPage, LogLevel::Note,
+                                      wxString::Format(wxT("[UNZIP] %ld/%ld (%ld%%) %s\n"), cur, total,
+                                                       percent,
+                                                       wxString::FromUTF8(fileS.c_str())));
                         });
                         continue;
                     }
                 }
 
-                this->CallAfter([this, line]() {
-                    m_logger->Log(LogLevel::Debug, wxString::FromUTF8(line.c_str()) + wxT("\n"));
+                this->CallAfter([this, line, targetPage]() {
+                    LogForTab(targetPage, LogLevel::Debug, wxString::FromUTF8(line.c_str()) + wxT("\n"));
                 });
             }
         };
         if (!runProcessAndCapture(psCmd, nullptr, &unzipExitCode, onUnzipChunk) ||
             unzipExitCode != 0) {
-            this->CallAfter([this, unzipExitCode]() {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(
-                                  wxT("[ERROR] Extraction failed (code %lu). Check PowerShell/Expand-Archive.\n"),
-                                  static_cast<unsigned long>(unzipExitCode)));
+            this->CallAfter([this, unzipExitCode, targetPage]() {
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(
+                              wxT("[ERROR] Extraction failed (code %lu). Check PowerShell/Expand-Archive.\n"),
+                              static_cast<unsigned long>(unzipExitCode)));
                 m_installButton->Enable(true);
                 m_installServerButton->Enable(m_steamcmdInstalled);
             });
             return;
         }
-        this->CallAfter([this]() {
-            m_logger->Log(LogLevel::Info, wxT("[INFO] Extraction finished.\n"));
+        this->CallAfter([this, targetPage]() {
+            LogForTab(targetPage, LogLevel::Info, wxT("[INFO] Extraction finished.\n"));
         });
 
         const DWORD attrs = GetFileAttributesA(steamcmdExe.c_str());
         if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-            this->CallAfter([this, steamcmdExe, toWx]() {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(wxT("[ERROR] steamcmd.exe not found after extraction: %s\n"),
-                                               toWx(steamcmdExe)));
+            this->CallAfter([this, steamcmdExe, toWx, targetPage]() {
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(wxT("[ERROR] steamcmd.exe not found after extraction: %s\n"),
+                                           toWx(steamcmdExe)));
                 m_installButton->Enable(true);
                 m_installServerButton->Enable(m_steamcmdInstalled);
             });
@@ -849,11 +1052,18 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
         (void)runSteamcmdQuit();
         (void)runSteamcmdQuit();
 
-        this->CallAfter([this, steamcmdExe, toWx]() {
-            m_logger->Log(LogLevel::Success,
-                          wxString::Format(wxT("[SUCCESS] SteamCMD installed: %s\n"), toWx(steamcmdExe)));
-            m_logger->Log(LogLevel::Info, wxT("[INFO] Action complete: install SteamCMD.\n"));
-            m_steamcmdInstalled = true;
+        this->CallAfter([this, steamcmdExe, toWx, targetPage]() {
+            LogForTab(targetPage, LogLevel::Success,
+                      wxString::Format(wxT("[SUCCESS] SteamCMD installed: %s\n"), toWx(steamcmdExe)));
+            LogForTab(targetPage, LogLevel::Info, wxT("[INFO] Action complete: install SteamCMD.\n"));
+            auto it = m_tabContexts.find(targetPage);
+            if (it != m_tabContexts.end()) {
+                it->second.steamcmdInstalled = true;
+            }
+            if (m_notebook && m_notebook->GetSelection() != wxNOT_FOUND &&
+                m_notebook->GetPage(m_notebook->GetSelection()) == targetPage) {
+                SetCurrentTabSteamcmdInstalled(true);
+            }
             SaveAppState();
             m_installButton->Enable(true);
             m_installServerButton->Enable(m_steamcmdInstalled);
@@ -866,8 +1076,9 @@ void MainFrame::OnInstallClicked(wxCommandEvent&) {
 
 void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
     if (m_lastInstallDir.IsEmpty()) {
-        m_logger->Log(LogLevel::Error,
-                      wxT("[ERROR] No saved install folder. Run '1. Install SteamCMD' first.\n"));
+        LogForTab(m_notebook ? m_notebook->GetPage(m_notebook->GetSelection()) : nullptr,
+                  LogLevel::Error,
+                  wxT("[ERROR] No saved install folder. Run '1. Install SteamCMD' first.\n"));
         return;
     }
 
@@ -876,13 +1087,14 @@ void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
     if (sel == wxNOT_FOUND || m_notebook->GetPage(sel) == m_plusPage) {
         return;
     }
+    wxWindow* const targetPage = m_notebook->GetPage(sel);
     const wxString tabName = m_notebook->GetPageText(sel);
     const wxString installDirWx = m_lastInstallDir + wxFILE_SEP_PATH + tabName;
     SaveServerDescriptionFromControls();
     SetBusyButtons(true);
-    m_logger->Log(LogLevel::Info, wxT("[INFO] Server installation requested.\n"));
+    LogForTab(targetPage, LogLevel::Info, wxT("[INFO] Server installation requested.\n"));
 
-    std::thread([this, installDirWx]() {
+    std::thread([this, installDirWx, targetPage]() {
         const std::string installDir = installDirWx.ToStdString();
         const std::string steamcmdExe = installDir + "\\steamcmd\\steamcmd.exe";
         const std::string workingDir = installDir + "\\steamcmd";
@@ -891,28 +1103,28 @@ void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
 
         const DWORD attrs = GetFileAttributesA(steamcmdExe.c_str());
         if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-            this->CallAfter([this, steamcmdExe, toWx]() {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(
-                                  wxT("[ERROR] steamcmd.exe not found: %s (run button 1 first)\n"),
-                                  toWx(steamcmdExe)));
+            this->CallAfter([this, steamcmdExe, toWx, targetPage]() {
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(
+                              wxT("[ERROR] steamcmd.exe not found: %s (run button 1 first)\n"),
+                              toWx(steamcmdExe)));
                 SetBusyButtons(false);
             });
             return;
         }
 
-        auto runSteamCommand = [this, &workingDir](const std::string& command,
+        auto runSteamCommand = [this, &workingDir, targetPage](const std::string& command,
                                                    const wxString& phase,
                                                    bool verboseOutput,
                                                    bool logCommand) -> DWORD {
-            this->CallAfter([this, phase, command, logCommand]() {
+            this->CallAfter([this, phase, command, logCommand, targetPage]() {
                 if (!phase.IsEmpty()) {
-                    m_logger->Log(LogLevel::Info, wxString::Format(wxT("[INFO] %s\n"), phase));
+                    LogForTab(targetPage, LogLevel::Info, wxString::Format(wxT("[INFO] %s\n"), phase));
                 }
                 if (logCommand) {
-                    m_logger->Log(LogLevel::Note,
-                                  wxString::Format(wxT("[NOTE] Command: %s\n"),
-                                                   wxString::FromUTF8(command.c_str())));
+                    LogForTab(targetPage, LogLevel::Note,
+                              wxString::Format(wxT("[NOTE] Command: %s\n"),
+                                               wxString::FromUTF8(command.c_str())));
                 }
             });
 
@@ -923,10 +1135,10 @@ void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
             HANDLE writePipe = nullptr;
             if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
                 const DWORD err = GetLastError();
-                this->CallAfter([this, err]() {
-                    m_logger->Log(LogLevel::Error,
-                                  wxString::Format(wxT("[ERROR] CreatePipe failed (code %lu).\n"),
-                                                   static_cast<unsigned long>(err)));
+                this->CallAfter([this, err, targetPage]() {
+                    LogForTab(targetPage, LogLevel::Error,
+                              wxString::Format(wxT("[ERROR] CreatePipe failed (code %lu).\n"),
+                                               static_cast<unsigned long>(err)));
                 });
                 return static_cast<DWORD>(-1);
             }
@@ -947,17 +1159,17 @@ void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
                 const DWORD err = GetLastError();
                 CloseHandle(writePipe);
                 CloseHandle(readPipe);
-                this->CallAfter([this, err]() {
-                    m_logger->Log(LogLevel::Error,
-                                  wxString::Format(wxT("[ERROR] CreateProcessA failed (code %lu).\n"),
-                                                   static_cast<unsigned long>(err)));
+                this->CallAfter([this, err, targetPage]() {
+                    LogForTab(targetPage, LogLevel::Error,
+                              wxString::Format(wxT("[ERROR] CreateProcessA failed (code %lu).\n"),
+                                               static_cast<unsigned long>(err)));
                 });
                 return static_cast<DWORD>(-1);
             }
 
-            this->CallAfter([this, pid = static_cast<unsigned long>(pi.dwProcessId)]() {
-                m_logger->Log(LogLevel::Info,
-                              wxString::Format(wxT("[INFO] steamcmd started (PID %lu).\n"), pid));
+            this->CallAfter([this, pid = static_cast<unsigned long>(pi.dwProcessId), targetPage]() {
+                LogForTab(targetPage, LogLevel::Info,
+                          wxString::Format(wxT("[INFO] steamcmd started (PID %lu).\n"), pid));
             });
 
             CloseHandle(writePipe);
@@ -997,7 +1209,7 @@ void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
                     } else {
                         level = LogLevel::Info;
                     }
-                    this->CallAfter([this, level, line]() { m_logger->Log(level, line); });
+                    this->CallAfter([this, level, line, targetPage]() { LogForTab(targetPage, level, line); });
                     continue;
                 }
 
@@ -1019,9 +1231,9 @@ void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
             return exitCode;
         };
 
-        this->CallAfter([this, installDirWx]() {
-            m_logger->Log(LogLevel::Note,
-                          wxString::Format(wxT("[NOTE] Server target folder: %s\n"), installDirWx));
+        this->CallAfter([this, installDirWx, targetPage]() {
+            LogForTab(targetPage, LogLevel::Note,
+                      wxString::Format(wxT("[NOTE] Server target folder: %s\n"), installDirWx));
         });
 
         const std::string bootstrapCommand = "\"" + steamcmdExe + "\" +quit";
@@ -1034,7 +1246,7 @@ void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
         const DWORD installExit = runSteamCommand(
             installCommand, wxT("Installing server via SteamCMD..."), true, true);
 
-        auto bootstrapServerConfigSilently = [this, &installDir]() -> bool {
+        auto bootstrapServerConfigSilently = [this, &installDir, targetPage]() -> bool {
             const std::string batPath =
                 installDir +
                 "\\steamcmd\\steamapps\\common\\Windrose Dedicated Server\\StartServerForeground.bat";
@@ -1090,10 +1302,9 @@ void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
                             }
                             if (ContainsBootstrapMarker(rollingLogBytes)) {
                                 markerSeen = true;
-                                this->CallAfter([this]() {
-                                    m_logger->Log(
-                                        LogLevel::Note,
-                                        wxT("[NOTE] Bootstrap marker detected (live), stopping bootstrap...\n"));
+                                this->CallAfter([this, targetPage]() {
+                                    LogForTab(targetPage, LogLevel::Note,
+                                              wxT("[NOTE] Bootstrap marker detected (live), stopping bootstrap...\n"));
                                 });
                                 break;
                             }
@@ -1183,18 +1394,18 @@ void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
                 }
             }
 
-            this->CallAfter([this, markerSeen, markerSeenByFinalTail]() {
+            this->CallAfter([this, markerSeen, markerSeenByFinalTail, targetPage]() {
                 if (markerSeen) {
                     if (markerSeenByFinalTail) {
-                        m_logger->Log(LogLevel::Note,
-                                      wxT("[NOTE] Bootstrap marker detected in final log-tail check.\n"));
+                        LogForTab(targetPage, LogLevel::Note,
+                                  wxT("[NOTE] Bootstrap marker detected in final log-tail check.\n"));
                     } else {
-                        m_logger->Log(LogLevel::Note,
-                                      wxT("[NOTE] Bootstrap marker detected during live log polling.\n"));
+                        LogForTab(targetPage, LogLevel::Note,
+                                  wxT("[NOTE] Bootstrap marker detected during live log polling.\n"));
                     }
                 } else {
-                    m_logger->Log(LogLevel::Warning,
-                                  wxT("[WARN] Bootstrap marker not detected before shutdown/timeout.\n"));
+                    LogForTab(targetPage, LogLevel::Warning,
+                              wxT("[WARN] Bootstrap marker not detected before shutdown/timeout.\n"));
                 }
             });
 
@@ -1207,23 +1418,28 @@ void MainFrame::OnInstallServerClicked(wxCommandEvent&) {
             configBootstrapOk = bootstrapServerConfigSilently();
         }
 
-        this->CallAfter([this, installExit, configBootstrapOk]() {
+        this->CallAfter([this, installExit, configBootstrapOk, targetPage]() {
             if (installExit == 0) {
-                m_logger->Log(LogLevel::Success, wxT("[SUCCESS] Server installation completed.\n"));
+                LogForTab(targetPage, LogLevel::Success, wxT("[SUCCESS] Server installation completed.\n"));
                 if (!configBootstrapOk) {
-                    m_logger->Log(
-                        LogLevel::Warning,
-                        wxT("[WARN] Config bootstrap marker was not reached, continuing anyway.\n"));
+                    LogForTab(targetPage, LogLevel::Warning,
+                              wxT("[WARN] Config bootstrap marker was not reached, continuing anyway.\n"));
                 }
-                m_serverInstalled = true;
+                auto it = m_tabContexts.find(targetPage);
+                if (it != m_tabContexts.end()) {
+                    it->second.serverInstalled = true;
+                }
+                if (m_notebook && m_notebook->GetSelection() != wxNOT_FOUND &&
+                    m_notebook->GetPage(m_notebook->GetSelection()) == targetPage) {
+                    SetCurrentTabServerInstalled(true);
+                }
                 SaveAppState();
                 LoadServerDescriptionToControls();
                 SetJsonControlsEnabled(true);
             } else {
-                m_logger->Log(
-                    LogLevel::Error,
-                    wxString::Format(wxT("[ERROR] steamcmd exited with code %lu.\n"),
-                                     static_cast<unsigned long>(installExit)));
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(wxT("[ERROR] steamcmd exited with code %lu.\n"),
+                                           static_cast<unsigned long>(installExit)));
                 SetJsonControlsEnabled(false);
             }
             SetBusyButtons(false);
@@ -1240,6 +1456,7 @@ void MainFrame::OnStartServerClicked(wxCommandEvent&) {
     if (sel == wxNOT_FOUND || m_notebook->GetPage(sel) == m_plusPage) {
         return;
     }
+    wxWindow* const targetPage = m_notebook->GetPage(sel);
     const wxString tabName = m_notebook->GetPageText(sel);
     const std::string installDir = (m_lastInstallDir + wxFILE_SEP_PATH + tabName).ToStdString();
     const std::string batPath =
@@ -1251,18 +1468,18 @@ void MainFrame::OnStartServerClicked(wxCommandEvent&) {
 
     const DWORD attrs = GetFileAttributesA(batPath.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        m_logger->Log(LogLevel::Error,
-                      wxString::Format(wxT("[ERROR] StartServerForeground.bat not found: %s\n"),
-                                       wxString::FromUTF8(batPath.c_str())));
+        LogForTab(targetPage, LogLevel::Error,
+                  wxString::Format(wxT("[ERROR] StartServerForeground.bat not found: %s\n"),
+                                   wxString::FromUTF8(batPath.c_str())));
         return;
     }
 
     const std::string cmdLine =
         "cmd.exe /d /q /c \"pushd \"" + batDir + "\" && call \"" + patchedBat + "\"\"";
-    m_logger->Log(LogLevel::Info, wxT("[INFO] Starting server and redirecting output...\n"));
+    LogForTab(targetPage, LogLevel::Info, wxT("[INFO] Starting server and redirecting output...\n"));
     SetBusyButtons(true);
 
-    std::thread([this, cmdLine, batDir]() {
+    std::thread([this, cmdLine, batDir, targetPage]() {
         STARTUPINFOA si = {};
         si.cb = sizeof(si);
         si.dwFlags = STARTF_USESHOWWINDOW;
@@ -1274,20 +1491,20 @@ void MainFrame::OnStartServerClicked(wxCommandEvent&) {
         if (!CreateProcessA(nullptr, buf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
                             nullptr, batDir.c_str(), &si, &pi)) {
             const DWORD err = GetLastError();
-            this->CallAfter([this, err]() {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(wxT("[ERROR] Failed to launch StartServer (code %lu).\n"),
-                                               static_cast<unsigned long>(err)));
+            this->CallAfter([this, err, targetPage]() {
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(wxT("[ERROR] Failed to launch StartServer (code %lu).\n"),
+                                           static_cast<unsigned long>(err)));
             });
             return;
         }
 
-        this->CallAfter([this, pid = static_cast<unsigned long>(pi.dwProcessId)]() {
+        this->CallAfter([this, pid = static_cast<unsigned long>(pi.dwProcessId), targetPage]() {
             m_startServerRunning = true;
             m_startServerPid = pid;
             SetBusyButtons(false);
-            m_logger->Log(LogLevel::Info,
-                          wxString::Format(wxT("[INFO] StartServer launched (PID %lu).\n"), pid));
+            LogForTab(targetPage, LogLevel::Info,
+                      wxString::Format(wxT("[INFO] StartServer launched (PID %lu).\n"), pid));
         });
 
         WaitForSingleObject(pi.hProcess, INFINITE);
@@ -1295,13 +1512,13 @@ void MainFrame::OnStartServerClicked(wxCommandEvent&) {
         GetExitCodeProcess(pi.hProcess, &exitCode);
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
-        this->CallAfter([this, exitCode]() {
+        this->CallAfter([this, exitCode, targetPage]() {
             m_startServerRunning = false;
             m_startServerPid = 0;
             SetBusyButtons(false);
-            m_logger->Log(LogLevel::Info,
-                          wxString::Format(wxT("[INFO] StartServer process exited (code %lu).\n"),
-                                           static_cast<unsigned long>(exitCode)));
+            LogForTab(targetPage, LogLevel::Info,
+                      wxString::Format(wxT("[INFO] StartServer process exited (code %lu).\n"),
+                                       static_cast<unsigned long>(exitCode)));
         });
     }).detach();
 #else
@@ -1311,26 +1528,29 @@ void MainFrame::OnStartServerClicked(wxCommandEvent&) {
 
 void MainFrame::OnStopServerClicked(wxCommandEvent&) {
 #ifdef _WIN32
+    const int sel = m_notebook ? m_notebook->GetSelection() : wxNOT_FOUND;
+    wxWindow* const targetPage =
+        (m_notebook && sel != wxNOT_FOUND) ? m_notebook->GetPage(sel) : nullptr;
     if (!m_startServerRunning || m_startServerPid == 0) {
         return;
     }
 
     const unsigned long pid = m_startServerPid;
-    m_logger->Log(LogLevel::Warning,
-                  wxString::Format(wxT("[WARN] Stop requested for StartServer PID %lu.\n"), pid));
+    LogForTab(targetPage, LogLevel::Warning,
+              wxString::Format(wxT("[WARN] Stop requested for StartServer PID %lu.\n"), pid));
 
-    std::thread([this, pid]() {
+    std::thread([this, pid, targetPage]() {
         const std::string killCmd =
             "cmd.exe /d /q /c \"taskkill /PID " + std::to_string(pid) + " /T /F\"";
         const int rc = std::system(killCmd.c_str());
-        this->CallAfter([this, pid, rc]() {
+        this->CallAfter([this, pid, rc, targetPage]() {
             if (rc == 0) {
-                m_logger->Log(LogLevel::Info,
-                              wxString::Format(wxT("[INFO] Stop command sent for PID %lu.\n"), pid));
+                LogForTab(targetPage, LogLevel::Info,
+                          wxString::Format(wxT("[INFO] Stop command sent for PID %lu.\n"), pid));
             } else {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(wxT("[ERROR] Stop command failed for PID %lu (rc=%d).\n"),
-                                               pid, rc));
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(wxT("[ERROR] Stop command failed for PID %lu (rc=%d).\n"),
+                                           pid, rc));
             }
         });
     }).detach();
@@ -1395,6 +1615,9 @@ void MainFrame::UpdateBackupScheduler() {
 }
 
 void MainFrame::RunBackupNowAsync() {
+    const int sel = m_notebook ? m_notebook->GetSelection() : wxNOT_FOUND;
+    wxWindow* const targetPage =
+        (m_notebook && sel != wxNOT_FOUND) ? m_notebook->GetPage(sel) : nullptr;
     if (m_backupInProgress) {
         return;
     }
@@ -1431,11 +1654,11 @@ void MainFrame::RunBackupNowAsync() {
         return s;
     };
 
-    m_logger->Log(LogLevel::Info,
-                  wxString::Format(wxT("[INFO] Backup started: %s\n"),
-                                   wxString::FromUTF8(zipName.c_str())));
+    LogForTab(targetPage, LogLevel::Info,
+              wxString::Format(wxT("[INFO] Backup started: %s\n"),
+                               wxString::FromUTF8(zipName.c_str())));
 
-    std::thread([this, sourceDir, zipPath, backupDir, maxBackups, quotePs]() {
+    std::thread([this, sourceDir, zipPath, backupDir, maxBackups, quotePs, targetPage]() {
         const std::string psCmd =
             "powershell -NoProfile -ExecutionPolicy Bypass -Command "
             "\"$ErrorActionPreference='Stop';"
@@ -1474,18 +1697,18 @@ void MainFrame::RunBackupNowAsync() {
             }
         }
 
-        this->CallAfter([this, rc, zipPath, maxBackups]() {
+        this->CallAfter([this, rc, zipPath, maxBackups, targetPage]() {
             m_backupInProgress = false;
             if (rc == 0) {
-                m_logger->Log(LogLevel::Success,
-                              wxString::Format(wxT("[SUCCESS] Backup created: %s\n"),
-                                               wxString::FromUTF8(zipPath.c_str())));
-                m_logger->Log(LogLevel::Note,
-                              wxString::Format(wxT("[NOTE] Backup retention: keep last %d zip(s).\n"),
-                                               maxBackups));
+                LogForTab(targetPage, LogLevel::Success,
+                          wxString::Format(wxT("[SUCCESS] Backup created: %s\n"),
+                                           wxString::FromUTF8(zipPath.c_str())));
+                LogForTab(targetPage, LogLevel::Note,
+                          wxString::Format(wxT("[NOTE] Backup retention: keep last %d zip(s).\n"),
+                                           maxBackups));
             } else {
-                m_logger->Log(LogLevel::Error,
-                              wxString::Format(wxT("[ERROR] Backup failed (rc=%d).\n"), rc));
+                LogForTab(targetPage, LogLevel::Error,
+                          wxString::Format(wxT("[ERROR] Backup failed (rc=%d).\n"), rc));
             }
         });
     }).detach();
@@ -1931,6 +2154,8 @@ void MainFrame::LoadAppState() {
     }
 
     std::vector<std::pair<int, wxString>> savedTabs;
+    std::unordered_map<int, bool> savedSteamcmdByTab;
+    std::unordered_map<int, bool> savedServerByTab;
     int savedSelectedTab = 0;
 
     std::string line;
@@ -1943,15 +2168,23 @@ void MainFrame::LoadAppState() {
         const std::string value = line.substr(eq + 1);
         if (key == "last_install_dir") {
             m_lastInstallDir = wxString::FromUTF8(value.c_str());
-        } else if (key == "steamcmd_installed") {
-            m_steamcmdInstalled = (value == "1");
-        } else if (key == "server_installed") {
-            m_serverInstalled = (value == "1");
         } else if (key == "selected_tab") {
             try {
                 savedSelectedTab = std::max(0, std::stoi(value));
             } catch (...) {
                 savedSelectedTab = 0;
+            }
+        } else if (key.rfind("tab_steamcmd_", 0) == 0) {
+            try {
+                const int tabIndex = std::stoi(key.substr(std::string("tab_steamcmd_").size()));
+                savedSteamcmdByTab[tabIndex] = (value == "1");
+            } catch (...) {
+            }
+        } else if (key.rfind("tab_server_", 0) == 0) {
+            try {
+                const int tabIndex = std::stoi(key.substr(std::string("tab_server_").size()));
+                savedServerByTab[tabIndex] = (value == "1");
+            } catch (...) {
             }
         } else if (key.rfind("tab_", 0) == 0) {
             try {
@@ -1968,15 +2201,26 @@ void MainFrame::LoadAppState() {
         std::sort(savedTabs.begin(), savedTabs.end(),
                   [](const auto& a, const auto& b) { return a.first < b.first; });
         for (const auto& [idx, tabName] : savedTabs) {
-            (void)idx;
             if (!tabName.IsEmpty()) {
                 CreateTab(tabName);
+                const int createdIdx = static_cast<int>(m_notebook->GetPageCount()) - 2;
+                TabContext* ctx = GetTabContextByIndex(createdIdx);
+                if (ctx) {
+                    auto itSteam = savedSteamcmdByTab.find(idx);
+                    auto itServer = savedServerByTab.find(idx);
+                    ctx->steamcmdInstalled =
+                        (itSteam != savedSteamcmdByTab.end()) ? itSteam->second : false;
+                    ctx->serverInstalled =
+                        (itServer != savedServerByTab.end()) ? itServer->second : false;
+                }
             }
         }
 
         const int pageCount = static_cast<int>(m_notebook->GetPageCount());
         const int lastTabIndex = std::max(0, pageCount - 2);
         m_notebook->SetSelection(std::min(savedSelectedTab, lastTabIndex));
+        ActivateTabContext(m_notebook->GetSelection());
+        SetBusyButtons(false);
     }
 
     if (m_logger) {
@@ -2002,8 +2246,6 @@ void MainFrame::SaveAppState() const {
     }
 
     out << "last_install_dir=" << m_lastInstallDir.ToStdString() << "\n";
-    out << "steamcmd_installed=" << (m_steamcmdInstalled ? "1" : "0") << "\n";
-    out << "server_installed=" << (m_serverInstalled ? "1" : "0") << "\n";
 
     int savedTabIdx = 0;
     for (size_t i = 0; i < m_notebook->GetPageCount(); ++i) {
@@ -2011,6 +2253,11 @@ void MainFrame::SaveAppState() const {
             continue;
         }
         out << "tab_" << savedTabIdx++ << "=" << m_notebook->GetPageText(i).ToStdString() << "\n";
+        const TabContext* ctx = GetTabContextByIndex(static_cast<int>(i));
+        out << "tab_steamcmd_" << (savedTabIdx - 1) << "="
+            << ((ctx && ctx->steamcmdInstalled) ? "1" : "0") << "\n";
+        out << "tab_server_" << (savedTabIdx - 1) << "="
+            << ((ctx && ctx->serverInstalled) ? "1" : "0") << "\n";
     }
 
     int selectedNonPlusIndex = 0;
