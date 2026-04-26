@@ -1,0 +1,61 @@
+-include makefile.config
+
+ifeq ($(OS),Windows_NT)
+  EXEEXT ?= .exe
+else
+  EXEEXT ?=
+endif
+
+APP      ?= WRSManager
+BINDIR   ?= bin
+BUILDDIR ?= build
+
+CXX       ?= g++
+WX_CONFIG ?= wx-config
+
+WX_CXXFLAGS := $(shell $(WX_CONFIG) --cxxflags 2>/dev/null)
+WX_LIBS     := $(shell $(WX_CONFIG) --libs 2>/dev/null) $(shell $(WX_CONFIG) --libs richtext 2>/dev/null)
+ifeq ($(OS),Windows_NT)
+  SYS_LIBS := -lwininet
+else
+  SYS_LIBS :=
+endif
+
+ifeq ($(strip $(WX_CXXFLAGS)),)
+  $(error wx-config introuvable — voir Makefile)
+endif
+
+INCLUDES := -Iinclude
+CXXFLAGS := $(WX_CXXFLAGS) $(INCLUDES) -Wall -Wextra -std=c++17 -MMD -MP
+
+SRC := $(wildcard src/*.cpp)
+OBJ := $(patsubst src/%.cpp,$(BUILDDIR)/%.o,$(SRC))
+DEP := $(OBJ:.o=.d)
+
+TARGET := $(BINDIR)/$(APP)$(EXEEXT)
+
+.PHONY: all clean run dirs
+
+all: dirs $(TARGET)
+
+dirs: $(BINDIR) $(BUILDDIR)
+
+$(BINDIR):
+	mkdir -p $(BINDIR)
+
+$(BUILDDIR):
+	mkdir -p $(BUILDDIR)
+
+$(TARGET): $(OBJ) | $(BINDIR)
+	$(CXX) -o $@ $(OBJ) $(WX_LIBS) $(SYS_LIBS)
+
+$(BUILDDIR)/%.o: src/%.cpp | $(BUILDDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+clean:
+	$(RM) -r $(BUILDDIR) $(BINDIR)
+
+run: all
+	./$(TARGET)
+
+-include $(DEP)
