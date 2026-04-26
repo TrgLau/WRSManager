@@ -184,6 +184,7 @@ MainFrame::MainFrame()
     : wxFrame(nullptr, wxID_ANY, wxT("WRSManager"),
               wxDefaultPosition, wxSize(832, 780)),
       m_backupTimer(this) {
+    Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnClose, this);
     Bind(wxEVT_TIMER, &MainFrame::OnBackupTimer, this, m_backupTimer.GetId());
     auto* menuFile = new wxMenu();
     menuFile->Append(ID_Quit, wxT("&Quit\tAlt-F4"));
@@ -453,6 +454,12 @@ void MainFrame::AppendNewTabAfterPlus() {
         return;
     }
     ++m_nextTabNum;
+    SaveAppState();
+}
+
+void MainFrame::OnClose(wxCloseEvent& event) {
+    SaveAppState();
+    event.Skip();
 }
 
 void MainFrame::OnExit(wxCommandEvent&) {
@@ -1923,6 +1930,9 @@ void MainFrame::LoadAppState() {
         return;
     }
 
+    std::vector<std::pair<int, wxString>> savedTabs;
+    int savedSelectedTab = 0;
+
     std::string line;
     while (std::getline(in, line)) {
         const size_t eq = line.find('=');
@@ -1937,7 +1947,36 @@ void MainFrame::LoadAppState() {
             m_steamcmdInstalled = (value == "1");
         } else if (key == "server_installed") {
             m_serverInstalled = (value == "1");
+        } else if (key == "selected_tab") {
+            try {
+                savedSelectedTab = std::max(0, std::stoi(value));
+            } catch (...) {
+                savedSelectedTab = 0;
+            }
+        } else if (key.rfind("tab_", 0) == 0) {
+            try {
+                const int tabIndex = std::stoi(key.substr(4));
+                if (tabIndex >= 0 && !value.empty()) {
+                    savedTabs.emplace_back(tabIndex, wxString::FromUTF8(value.c_str()));
+                }
+            } catch (...) {
+            }
         }
+    }
+
+    if (!savedTabs.empty()) {
+        std::sort(savedTabs.begin(), savedTabs.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& [idx, tabName] : savedTabs) {
+            (void)idx;
+            if (!tabName.IsEmpty()) {
+                CreateTab(tabName);
+            }
+        }
+
+        const int pageCount = static_cast<int>(m_notebook->GetPageCount());
+        const int lastTabIndex = std::max(0, pageCount - 2);
+        m_notebook->SetSelection(std::min(savedSelectedTab, lastTabIndex));
     }
 
     if (m_logger) {
@@ -1965,6 +2004,29 @@ void MainFrame::SaveAppState() const {
     out << "last_install_dir=" << m_lastInstallDir.ToStdString() << "\n";
     out << "steamcmd_installed=" << (m_steamcmdInstalled ? "1" : "0") << "\n";
     out << "server_installed=" << (m_serverInstalled ? "1" : "0") << "\n";
+
+    int savedTabIdx = 0;
+    for (size_t i = 0; i < m_notebook->GetPageCount(); ++i) {
+        if (m_notebook->GetPage(i) == m_plusPage) {
+            continue;
+        }
+        out << "tab_" << savedTabIdx++ << "=" << m_notebook->GetPageText(i).ToStdString() << "\n";
+    }
+
+    int selectedNonPlusIndex = 0;
+    const int selectedPage = m_notebook ? m_notebook->GetSelection() : wxNOT_FOUND;
+    if (selectedPage != wxNOT_FOUND) {
+        selectedNonPlusIndex = 0;
+        for (int i = 0; i < selectedPage; ++i) {
+            if (m_notebook->GetPage(i) != m_plusPage) {
+                ++selectedNonPlusIndex;
+            }
+        }
+        if (m_notebook->GetPage(selectedPage) == m_plusPage && selectedNonPlusIndex > 0) {
+            --selectedNonPlusIndex;
+        }
+    }
+    out << "selected_tab=" << std::max(0, selectedNonPlusIndex) << "\n";
 }
 
 void MainFrame::SetBusyButtons(bool busy) {

@@ -16,6 +16,7 @@ public:
     MainFrame();
 
 private:
+    void OnClose(wxCloseEvent& event);
     void OnExit(wxCommandEvent& event);
     void OnAbout(wxCommandEvent& event);
     void OnInstallClicked(wxCommandEvent& event);
