@@ -253,6 +253,7 @@ bool MainFrame::CreateTab(const wxString& tabName) {
     formRight->AddGrowableCol(1, 1);
 
     m_worldIslandIdCtrl = new wxTextCtrl(page, wxID_ANY);
+    m_worldIslandIdCtrl->Hide();
     m_worldNameCtrl = new wxTextCtrl(page, wxID_ANY);
     m_worldPresetChoice = new wxChoice(page, wxID_ANY);
     m_worldPresetChoice->Append(wxT("Small"));
